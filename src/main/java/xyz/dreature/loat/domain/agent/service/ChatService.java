@@ -1,4 +1,4 @@
-package xyz.dreature.loat.service;
+package xyz.dreature.loat.domain.agent.service;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
