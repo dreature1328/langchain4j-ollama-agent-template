@@ -21,7 +21,14 @@ public class ReActRequest {
     @Max(value = 100, message = "最大步数至多为 100")
     private int maxSteps = 10;
 
+    @Min(value = 0, message = "刷新间隔不能为负")
+    private int refreshInterval = 0; // 0 表示不启用刷新
+
     // ===== 构造方法 =====
+    // 无参构造器
+    public ReActRequest() {
+    }
+
     // 基础构造器
     public ReActRequest(String conversationId, String userInput) {
         this.conversationId = conversationId;
@@ -53,6 +60,14 @@ public class ReActRequest {
         this.maxSteps = maxSteps;
     }
 
+    public int getRefreshInterval() {
+        return refreshInterval;
+    }
+
+    public void setRefreshInterval(int refreshInterval) {
+        this.refreshInterval = refreshInterval;
+    }
+
     // ===== 其他 =====
     // 字符串表示
     @Override
@@ -61,6 +76,7 @@ public class ReActRequest {
                 "conversationId='" + conversationId + '\'' +
                 ", userInput='" + userInput + '\'' +
                 ", maxSteps=" + maxSteps +
+                ", refreshInterval=" + refreshInterval +
                 '}';
     }
 }

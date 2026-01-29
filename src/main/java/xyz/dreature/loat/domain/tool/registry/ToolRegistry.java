@@ -1,8 +1,12 @@
 package xyz.dreature.loat.domain.tool.registry;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
+import dev.langchain4j.service.tool.ToolExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,11 +23,13 @@ import java.util.Map;
 
 @Slf4j
 @Component
-public class ToolRegistry implements SmartInitializingSingleton {
+public class ToolRegistry implements ToolExecutor, SmartInitializingSingleton {
     // 存储工具名到工具执行包装类的映射
     private final Map<String, ExecutableTool> toolMap = new HashMap<>();
     @Autowired
     private ApplicationContext context;
+    @Autowired
+    private ObjectMapper objectMapper;
 
     // 实现接口函数，调用于容器完全初始化后，避免循环依赖
     @Override
@@ -53,11 +59,20 @@ public class ToolRegistry implements SmartInitializingSingleton {
         log.debug("工具集描述：\n{}", getDescription());
     }
 
-    // 根据工具名获取工具执行包装类
+    // 获取工具执行包装类
     public ExecutableTool get(String toolName) {
         return toolMap.get(toolName);
     }
 
+    // 获取工具类实例列表
+    public List<Object> getToolComponents() {
+        return toolMap.values().stream()
+                .map(ExecutableTool::getTarget)
+                .distinct()
+                .toList();
+    }
+
+    // 获取工具规范描述
     public String getDescription() {
         StringBuilder sb = new StringBuilder();
         if (toolMap.isEmpty()) {
@@ -84,5 +99,29 @@ public class ToolRegistry implements SmartInitializingSingleton {
         }
 
         return sb.toString();
+    }
+
+    // 执行工具
+    @Override
+    public String execute(ToolExecutionRequest toolExecutionRequest, Object memoryId) {
+        String toolName = toolExecutionRequest.name();
+        String argumentsJson = toolExecutionRequest.arguments();
+        try {
+            ExecutableTool tool = toolMap.get(toolName);
+            if (tool == null) {
+                return "未知工具: " + toolName;
+            }
+
+            // 解析 JSON 字符串为 Map
+            Map<String, Object> arguments = objectMapper.readValue(argumentsJson, new TypeReference<>() {
+            });
+
+            Object result = tool.execute(arguments);
+            return objectMapper.writeValueAsString(result);
+
+        } catch (Exception e) {
+            log.error("工具执行失败: {} | 参数: {}", toolName, argumentsJson, e);
+            return "工具执行失败: " + e.getMessage();
+        }
     }
 }

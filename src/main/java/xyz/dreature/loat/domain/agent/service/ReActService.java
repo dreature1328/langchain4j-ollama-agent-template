@@ -5,9 +5,11 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.ChatMemoryProvider;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.store.memory.chat.ChatMemoryStore;
+import dev.langchain4j.service.AiServices;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -26,9 +28,9 @@ import java.util.Map;
 @Service
 public class ReActService {
     @Autowired
-    private ChatLanguageModel model;
+    private ChatModel chatModel;
     @Autowired
-    private ChatMemoryStore chatMemoryStore;
+    private ChatMemoryProvider chatMemoryProvider;
     @Autowired
     private ToolRegistry toolRegistry;
     @Autowired
@@ -36,31 +38,39 @@ public class ReActService {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private int interaction;
-
-    // 处理流程
+    // 手动处理流程（程序控制）
     public String process(ReActRequest request) {
-        System.out.printf("\uD83D\uDE80 开始处理用户请求 | 会话 ID: %s%n", request.getConversationId());
+        String conversationId = request.getConversationId();
+        System.out.printf("\uD83D\uDE80 开始处理用户请求 | 会话 ID: %s%n", conversationId);
 
-        // 获取历史记录作为上下文
-        List<ChatMessage> messages = chatMemoryStore.getMessages(request.getConversationId());
+        // 获取对话记忆
+        ChatMemory chatMemory = chatMemoryProvider.get(conversationId);
+
+        // 定义保留消息（不被刷新）
+        SystemMessage systemMessage = SystemMessage.from(promptService.buildSystemPrompt());
+        UserMessage userMessage = UserMessage.from(promptService.buildUserPrompt(request));
+        List<ChatMessage> reservedMessages = List.of(systemMessage, userMessage);
 
         // 若对话为新，则添加系统消息
-        if (messages.isEmpty()) {
-            messages.add(SystemMessage.from(promptService.buildSystemPrompt()));
+        if (chatMemory.messages().isEmpty()) {
+            chatMemory.add(systemMessage);
         }
-        // 添加用户消息
-        messages.add(UserMessage.from(promptService.buildUserPrompt(request)));
+        // 添加当前用户消息
+        chatMemory.add(userMessage);
+
+
+        int maxSteps = request.getMaxSteps();
+        int refreshInterval = request.getRefreshInterval();
 
         // 进入“推理-行动-观察”流程，循环直至步骤上限
-        for (int step = 0; step < request.getMaxSteps(); step++, interaction++) {
-            System.out.printf("\uD83D\uDCCA 第 %d 步 | 最多步数：%d%n", step + 1, request.getMaxSteps());
+        for (int currentStep = 1; currentStep <= maxSteps; currentStep++) {
+            System.out.printf("\uD83D\uDCCA 第 %d 步 | 最多步数：%d%n", currentStep, maxSteps);
 
             // 调用模型
-            ChatResponse response = model.chat(messages);
+            ChatResponse response = chatModel.chat(chatMemory.messages());
             AiMessage aiMessage = response.aiMessage();
             // 添加 AI 消息
-            messages.add(aiMessage);
+            chatMemory.add(aiMessage);
 
             System.out.printf("\uD83E\uDD16 AI 响应：\n%s%n", aiMessage.text());
 
@@ -75,12 +85,12 @@ public class ReActService {
                     String errorObs = String.format(
                             "{\"observation\": \"%s\"}",
                             reActResponse.getIncorrectAnswerFormat());
-                    messages.add(UserMessage.from(errorObs));
+                    chatMemory.add(UserMessage.from(errorObs));
                     continue;
                 }
 
                 if (reActResponse.hasFinalAnswer()) {
-                    System.out.printf("✅ 处理完成 | 总交互次数: %d%n", this.interaction + 1);
+                    System.out.printf("✅ 处理完成%n");
                     return reActResponse.getFinalAnswer();
                 }
 
@@ -104,9 +114,12 @@ public class ReActService {
                     String observationJson = String.format(
                             "{\"observation\": \"%s\"}",
                             String.join("; ", observations));
-                    messages.add(UserMessage.from(observationJson));
+                    chatMemory.add(UserMessage.from(observationJson));
                 }
 
+                if (refreshInterval > 0 && currentStep % refreshInterval == 0) {
+                    refreshContext(chatMemory, reservedMessages);
+                }
             } catch (Exception e) {
                 log.error("JSON 解析异常 | 错误: {} | 原始响应: {}",
                         e.getMessage(), aiMessage.text(), e);
@@ -114,13 +127,39 @@ public class ReActService {
                 String errorObs = String.format(
                         "{\"observation\": \"JSON 解析失败: %s\"}",
                         e.getMessage());
-                messages.add(UserMessage.from(errorObs));
+                chatMemory.add(UserMessage.from(errorObs));
             }
-
-            chatMemoryStore.updateMessages(request.getConversationId(), messages);
         }
         log.warn("⚠️ 达到最大步骤限制");
         return "任务未完成，已达到最大步骤数";
+    }
+
+    // 自动处理流程（框架托管，需模型原生支持 function calling 协议）
+    public String processX(ReActRequest request) {
+        String rolePrompt = promptService.buildRolePrompt();
+        String environmentPrompt = promptService.buildEnvironmentPrompt();
+        String userPrompt = promptService.buildUserPrompt(request);
+
+        AgentService agentService = AiServices.builder(AgentService.class)
+                .chatModel(chatModel)
+                .chatMemoryProvider(chatMemoryProvider)
+                .tools(toolRegistry.getToolComponents())
+                .build();
+
+        String result = agentService.react(
+                request.getConversationId(),
+                rolePrompt,
+                environmentPrompt,
+                userPrompt
+        );
+
+        return result;
+    }
+
+    // 清空上下文但保留关键信息
+    public void refreshContext(ChatMemory chatMemory, List<ChatMessage> reservedMessages) {
+        chatMemory.clear();
+        chatMemory.add(reservedMessages);
     }
 
     // 执行工具

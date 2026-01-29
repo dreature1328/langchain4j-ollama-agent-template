@@ -54,7 +54,7 @@ public class PromptService {
     public String buildFormatPrompt() {
         String formatPrompt = """
                 你必须严格使用 JSON 格式回复，结构如下：
-                ```json
+
                 {
                   "question": "用户的问题",
                   "thought": "你的思考过程",
@@ -62,7 +62,6 @@ public class PromptService {
                   "observation": "工具执行后的观察结果",
                   "final_answer": "最终答案"
                 }
-                ```
                 """;
 
         return formatPrompt;
@@ -72,7 +71,7 @@ public class PromptService {
     public String buildRulePrompt() {
         String rulePrompt = """
                 1. 必须包含 thought 字段值，描述你的思考过程
-                2. 如需要使用工具，在 action 字段中指定值（支持多个工具）
+                2. 如需使用工具，在 action 字段中指定值（支持多个工具）
                 3. 不要生成 observation 字段值，我会提供工具执行结果
                 4. 只有在获取所有工具结果后，才提供 final_answer 字段值
                 5. 文件路径使用绝对路径
